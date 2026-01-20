@@ -1,30 +1,34 @@
-import os
-import time
-import hydra
-import torch
-import wandb
-import logging
-import warnings
-import threading
 import itertools
-import numpy as np
-from tqdm import tqdm
-from omegaconf import OmegaConf, open_dict
-from einops import rearrange
-from accelerate import Accelerator
-from torchvision import utils
-import torch.distributed as dist
-from pathlib import Path
+import logging
+import os
+import threading
+import time
+import warnings
 from collections import OrderedDict
-from hydra.types import RunMode
-from hydra.core.hydra_config import HydraConfig
-from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from pathlib import Path
+
+import hydra
+import numpy as np
+import torch
+import torch.distributed as dist
+import wandb
+from accelerate import Accelerator
+from einops import rearrange
+from hydra.core.hydra_config import HydraConfig
+from hydra.types import RunMode
+from omegaconf import OmegaConf, open_dict
+from torchvision import utils
+from tqdm import tqdm
+
+import custom_resolvers  # noqa: F401 # For Hydra
 from metrics.image_metrics import eval_images
-from utils import slice_trajdict_with_t, cfg_to_dict, seed, sample_tensors
+from utils import cfg_to_dict, sample_tensors, seed, slice_trajdict_with_t
 
 warnings.filterwarnings("ignore")
 log = logging.getLogger(__name__)
+
 
 class Trainer:
     def __init__(self, cfg):
@@ -126,7 +130,7 @@ class Trainer:
             x: torch.utils.data.DataLoader(
                 self.datasets[x],
                 batch_size=self.cfg.gpu_batch_size,
-                shuffle=False, # already shuffled in TrajSlicerDataset
+                shuffle=False,  # already shuffled in TrajSlicerDataset
                 num_workers=self.cfg.env.num_workers,
                 collate_fn=None,
             )
@@ -147,10 +151,12 @@ class Trainer:
         self.train_encoder = self.cfg.model.train_encoder
         self.train_predictor = self.cfg.model.train_predictor
         self.train_decoder = self.cfg.model.train_decoder
-        log.info(f"Train encoder, predictor, decoder:\
+        log.info(
+            f"Train encoder, predictor, decoder:\
             {self.cfg.model.train_encoder}\
             {self.cfg.model.train_predictor}\
-            {self.cfg.model.train_decoder}")
+            {self.cfg.model.train_decoder}"
+        )
 
         self._keys_to_save = [
             "epoch",
@@ -223,7 +229,9 @@ class Trainer:
             emb_dim=self.cfg.proprio_emb_dim,
         )
         proprio_emb_dim = self.proprio_encoder.emb_dim
-        print(f"Proprio encoder type: {type(self.proprio_encoder)}")
+        log.info(
+            f"Initialized Proprio Encoder: {type(self.proprio_encoder).__name__} (emb_dim={proprio_emb_dim})"
+        )
         self.proprio_encoder = self.accelerator.prepare(self.proprio_encoder)
 
         self.action_encoder = hydra.utils.instantiate(
@@ -232,7 +240,9 @@ class Trainer:
             emb_dim=self.cfg.action_emb_dim,
         )
         action_emb_dim = self.action_encoder.emb_dim
-        print(f"Action encoder type: {type(self.action_encoder)}")
+        log.info(
+            f"Initialized Action Encoder: {type(self.action_encoder).__name__} (emb_dim={action_emb_dim})"
+        )
 
         self.action_encoder = self.accelerator.prepare(self.action_encoder)
 
@@ -348,7 +358,7 @@ class Trainer:
                 ]
                 for epoch, job_name, job in finished_jobs:
                     result = job.result()
-                    print(f"Logging result for {job_name} at epoch {epoch}: {result}")
+                    log.info(f"Job completed: {job_name} (epoch {epoch})")
                     log_data = {
                         f"{job_name}/{key}": value for key, value in result.items()
                     }
@@ -654,11 +664,15 @@ class Trainer:
                     if obs["visual"].shape[0] > min_horizon * self.cfg.frameskip + 1:
                         start = np.random.randint(
                             0,
-                            obs["visual"].shape[0] - min_horizon * self.cfg.frameskip - 1,
+                            obs["visual"].shape[0]
+                            - min_horizon * self.cfg.frameskip
+                            - 1,
                         )
                     else:
                         start = 0
-                    max_horizon = (obs["visual"].shape[0] - start - 1) // self.cfg.frameskip
+                    max_horizon = (
+                        obs["visual"].shape[0] - start - 1
+                    ) // self.cfg.frameskip
                     if max_horizon > min_horizon:
                         valid_traj = True
                         horizon = np.random.randint(min_horizon, max_horizon + 1)
@@ -669,9 +683,9 @@ class Trainer:
 
             for k in obs.keys():
                 obs[k] = obs[k][
-                    start : 
-                    start + horizon * self.cfg.frameskip + 1 : 
-                    self.cfg.frameskip
+                    start : start
+                    + horizon * self.cfg.frameskip
+                    + 1 : self.cfg.frameskip
                 ]
             act = act[start : start + horizon * self.cfg.frameskip]
             act = rearrange(act, "(h f) d -> h (f d)", f=self.cfg.frameskip)
@@ -698,13 +712,9 @@ class Trainer:
                 for k in div_loss.keys():
                     log_key = f"z_{k}_err_rollout{postfix}"
                     if log_key in logs:
-                        logs[f"z_{k}_err_rollout{postfix}"].append(
-                            div_loss[k]
-                        )
+                        logs[f"z_{k}_err_rollout{postfix}"].append(div_loss[k])
                     else:
-                        logs[f"z_{k}_err_rollout{postfix}"] = [
-                            div_loss[k]
-                        ]
+                        logs[f"z_{k}_err_rollout{postfix}"] = [div_loss[k]]
 
                 if self.cfg.has_decoder:
                     visuals = self.model.decode_obs(z_obses)[0]["visual"]
@@ -737,8 +747,10 @@ class Trainer:
             to_log = sum / count
             epoch_log[key] = to_log
         epoch_log["epoch"] = step
-        log.info(f"Epoch {self.epoch}  Training loss: {epoch_log['train_loss']:.4f}  \
-                Validation loss: {epoch_log['val_loss']:.4f}")
+        log.info(
+            f"Epoch {self.epoch}  Training loss: {epoch_log['train_loss']:.4f}  \
+                Validation loss: {epoch_log['val_loss']:.4f}"
+        )
 
         if self.accelerator.is_main_process:
             self.wandb_run.log(epoch_log)

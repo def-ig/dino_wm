@@ -1,11 +1,15 @@
-import abc
-import torch
-import numpy as np
-from torch.utils.data import Dataset
+from logging import getLogger
 from typing import Optional, Sequence, List
+import abc
+
+from einops import rearrange
 from torch.utils.data import Dataset, Subset
 from torch import default_generator, randperm
-from einops import rearrange
+import numpy as np
+import torch
+
+log = getLogger(__name__)
+
 
 # https://github.com/JaidedAI/EasyOCR/issues/1243
 def _accumulate(iterable, fn=lambda x, y: x + y):
@@ -22,6 +26,7 @@ def _accumulate(iterable, fn=lambda x, y: x + y):
         total = fn(total, element)
         yield total
 
+
 class TrajDataset(Dataset, abc.ABC):
     @abc.abstractmethod
     def get_seq_length(self, idx):
@@ -29,6 +34,7 @@ class TrajDataset(Dataset, abc.ABC):
         Returns the length of the idx-th trajectory.
         """
         raise NotImplementedError
+
 
 class TrajSubset(TrajDataset, Subset):
     """
@@ -38,6 +44,7 @@ class TrajSubset(TrajDataset, Subset):
         dataset (TrajectoryDataset): The whole Dataset
         indices (sequence): Indices in the whole set selected for subset
     """
+
     def __init__(self, dataset: TrajDataset, indices: Sequence[int]):
         Subset.__init__(self, dataset, indices)
 
@@ -47,7 +54,9 @@ class TrajSubset(TrajDataset, Subset):
     def __getattr__(self, name):
         if hasattr(self.dataset, name):
             return getattr(self.dataset, name)
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
 
 
 class TrajSlicerDataset(TrajDataset):
@@ -62,10 +71,12 @@ class TrajSlicerDataset(TrajDataset):
         self.num_frames = num_frames
         self.frameskip = frameskip
         self.slices = []
-        for i in range(len(self.dataset)): 
+        for i in range(len(self.dataset)):
             T = self.dataset.get_seq_length(i)
             if T - num_frames < 0:
-                print(f"Ignored short sequence #{i}: len={T}, num_frames={num_frames}")
+                log.warning(
+                    f"Skipping sequence #{i} (length {T} < required {num_frames} frames)"
+                )
             else:
                 self.slices += [
                     (i, start, start + num_frames * self.frameskip)
@@ -73,7 +84,7 @@ class TrajSlicerDataset(TrajDataset):
                 ]  # slice indices follow convention [start, end)
         # randomly permute the slices
         self.slices = np.random.permutation(self.slices)
-        
+
         self.proprio_dim = self.dataset.proprio_dim
         if process_actions == "concat":
             self.action_dim = self.dataset.action_dim * self.frameskip
@@ -81,7 +92,6 @@ class TrajSlicerDataset(TrajDataset):
             self.action_dim = self.dataset.action_dim
 
         self.state_dim = self.dataset.state_dim
-
 
     def get_seq_length(self, idx: int) -> int:
         return self.num_frames
@@ -93,8 +103,8 @@ class TrajSlicerDataset(TrajDataset):
         i, start, end = self.slices[idx]
         obs, act, state, _ = self.dataset[i]
         for k, v in obs.items():
-            obs[k] = v[start:end:self.frameskip]
-        state = state[start:end:self.frameskip]
+            obs[k] = v[start : end : self.frameskip]
+        state = state[start : end : self.frameskip]
         act = act[start:end]
         act = rearrange(act, "(n f) d -> n (f d)", n=self.num_frames)  # concat actions
         return tuple([obs, act, state])
@@ -111,12 +121,6 @@ def random_split_traj(
         )
 
     indices = randperm(sum(lengths), generator=generator).tolist()
-    print(
-        [
-            indices[offset - length : offset]
-            for offset, length in zip(_accumulate(lengths), lengths)
-        ]
-    )
     return [
         TrajSubset(dataset, indices[offset - length : offset])
         for offset, length in zip(_accumulate(lengths), lengths)

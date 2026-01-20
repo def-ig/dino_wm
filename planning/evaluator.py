@@ -1,17 +1,13 @@
-import os
+from logging import getLogger
 import torch
 import imageio
 import numpy as np
-from einops import rearrange, repeat
-from utils import (
-    cfg_to_dict,
-    seed,
-    slice_trajdict_with_t,
-    aggregate_dct,
-    move_to_device,
-    concat_trajdict,
-)
+
+from einops import rearrange
+from utils import move_to_device
 from torchvision import utils
+
+log = getLogger(__name__)
 
 
 class PlanEvaluator:  # evaluator for planning
@@ -156,15 +152,18 @@ class PlanEvaluator:  # evaluator for planning
             successes
         """
         eval_results = self.env.eval_state(self.state_g, e_state)
-        successes = eval_results['success']
+        successes = eval_results["success"]
 
         logs = {
-            f"success_rate" if key == "success" else f"mean_{key}": np.mean(value) if key != "success" else np.mean(value.astype(float))
+            f"success_rate" if key == "success" else f"mean_{key}": np.mean(value)
+            if key != "success"
+            else np.mean(value.astype(float))
             for key, value in eval_results.items()
         }
 
-        print("Success rate: ", logs['success_rate'])
-        print(eval_results)
+        log.info(
+            f"Success rate: {logs['success_rate']:.2%} ({np.sum(eval_results['success'])}/{len(eval_results['success'])} successes)"
+        )
 
         visual_dists = np.linalg.norm(e_obs["visual"] - self.obs_g["visual"], axis=1)
         mean_visual_dist = np.mean(visual_dists)
@@ -176,12 +175,14 @@ class PlanEvaluator:  # evaluator for planning
         div_visual_emb = torch.norm(e_z_obs["visual"] - i_z_obs["visual"]).item()
         div_proprio_emb = torch.norm(e_z_obs["proprio"] - i_z_obs["proprio"]).item()
 
-        logs.update({
-            "mean_visual_dist": mean_visual_dist,
-            "mean_proprio_dist": mean_proprio_dist,
-            "mean_div_visual_emb": div_visual_emb,
-            "mean_div_proprio_emb": div_proprio_emb,
-        })
+        logs.update(
+            {
+                "mean_visual_dist": mean_visual_dist,
+                "mean_proprio_dist": mean_proprio_dist,
+                "mean_div_visual_emb": div_visual_emb,
+                "mean_div_proprio_emb": div_proprio_emb,
+            }
+        )
 
         return logs, successes
 
@@ -244,9 +245,9 @@ class PlanEvaluator:  # evaluator for planning
             i_visuals = i_visuals[:, :: self.frameskip]
 
         n_columns = e_visuals.shape[1]
-        assert (
-            i_visuals.shape[1] == n_columns
-        ), f"Rollout lengths do not match, {e_visuals.shape[1]} and {i_visuals.shape[1]}"
+        assert i_visuals.shape[1] == n_columns, (
+            f"Rollout lengths do not match, {e_visuals.shape[1]} and {i_visuals.shape[1]}"
+        )
 
         # add a goal column
         e_visuals = torch.cat([e_visuals.cpu(), goal_visual - correction], dim=1)

@@ -1,24 +1,25 @@
-import os
-import gym
 import json
-import hydra
-import random
-import torch
-import pickle
-import wandb
 import logging
+import os
+import pickle
+import random
 import warnings
-import numpy as np
-import submitit
 from itertools import product
 from pathlib import Path
+
+import gym
+import hydra
+import numpy as np
+import submitit
+import torch
+import wandb
 from einops import rearrange
 from omegaconf import OmegaConf, open_dict
 
+import custom_resolvers  # noqa: F401 # For Hydra
 from env.venv import SubprocVectorEnv
-from custom_resolvers import replace_slash
-from preprocessor import Preprocessor
 from planning.evaluator import PlanEvaluator
+from preprocessor import Preprocessor
 from utils import cfg_to_dict, seed
 
 warnings.filterwarnings("ignore")
@@ -32,9 +33,11 @@ ALL_MODEL_KEYS = [
     "action_encoder",
 ]
 
+
 def planning_main_in_dir(working_dir, cfg_dict):
     os.chdir(working_dir)
     return planning_main(cfg_dict=cfg_dict)
+
 
 def launch_plan_jobs(
     epoch,
@@ -60,9 +63,7 @@ def launch_plan_jobs(
             cfg_dict["wandb_logging"] = False  # don't init wandb
             job = executor.submit(planning_main_in_dir, subdir_path, cfg_dict)
             jobs.append((epoch, subdir_name, job))
-            print(
-                f"Submitted evaluation job for checkpoint: {subdir_path}, job id: {job.job_id}"
-            )
+            log.info(f"Submitted planning job: {subdir_name} (job_id={job.job_id})")
         return jobs
 
 
@@ -103,7 +104,9 @@ def build_plan_cfg_dicts(
         override_args.pop("planner")
         cfg = OmegaConf.merge(cfg, OmegaConf.create(override_args))
         cfg_dict = OmegaConf.to_container(cfg)
-        cfg_dict["planner"]["horizon"] = cfg_dict["goal_H"]  # assume planning horizon equals to goal horizon
+        cfg_dict["planner"]["horizon"] = cfg_dict[
+            "goal_H"
+        ]  # assume planning horizon equals to goal horizon
         cfg_dicts.append(cfg_dict)
     return cfg_dicts
 
@@ -130,7 +133,9 @@ class PlanWorkspace:
 
         # have different seeds for each planning instances
         self.eval_seed = [cfg_dict["seed"] * n + 1 for n in range(cfg_dict["n_evals"])]
-        print("eval_seed: ", self.eval_seed)
+        log.info(
+            f"Planning evaluation seeds ({cfg_dict['n_evals']} instances): {self.eval_seed}"
+        )
         self.n_evals = cfg_dict["n_evals"]
         self.goal_source = cfg_dict["goal_source"]
         self.goal_H = cfg_dict["goal_H"]
@@ -189,6 +194,7 @@ class PlanWorkspace:
 
         # optional: assume planning horizon equals to goal horizon
         from planning.mpc import MPCPlanner
+
         if isinstance(self.planner, MPCPlanner):
             self.planner.sub_planner.horizon = cfg_dict["goal_H"]
             self.planner.n_taken_actions = cfg_dict["goal_H"]
@@ -201,7 +207,7 @@ class PlanWorkspace:
         states = []
         actions = []
         observations = []
-        
+
         if self.goal_source == "random_state":
             # update env config from val trajs
             observations, states, actions, env_info = (
@@ -213,7 +219,9 @@ class PlanWorkspace:
             rand_init_state, rand_goal_state = self.env.sample_random_init_goal_states(
                 self.eval_seed
             )
-            if self.env_name == "deformable_env": # take rand init state from dset for deformable envs
+            if (
+                self.env_name == "deformable_env"
+            ):  # take rand init state from dset for deformable envs
                 rand_init_state = np.array([x[0] for x in states])
 
             obs_0, state_0 = self.env.prepare(self.eval_seed, rand_init_state)
@@ -232,7 +240,9 @@ class PlanWorkspace:
         else:
             # update env config from val trajs
             observations, states, actions, env_info = (
-                self.sample_traj_segment_from_dset(traj_len=self.frameskip * self.goal_H + 1)
+                self.sample_traj_segment_from_dset(
+                    traj_len=self.frameskip * self.goal_H + 1
+                )
             )
             self.env.update_env(env_info)
 
@@ -284,10 +294,7 @@ class PlanWorkspace:
                 max_offset = obs["visual"].shape[0] - traj_len
             state = state.numpy()
             offset = random.randint(0, max_offset)
-            obs = {
-                key: arr[offset : offset + traj_len]
-                for key, arr in obs.items()
-            }
+            obs = {key: arr[offset : offset + traj_len] for key, arr in obs.items()}
             state = state[offset : offset + traj_len]
             act = act[offset : offset + self.frameskip * self.goal_H]
             actions.append(act)
@@ -320,7 +327,7 @@ class PlanWorkspace:
                 f,
             )
         file_path = os.path.abspath("plan_targets.pkl")
-        print(f"Dumped plan targets to {file_path}")
+        log.info(f"Saved planning targets: {file_path}")
 
     def perform_planning(self):
         if self.debug_dset_init:
@@ -367,7 +374,7 @@ def load_model(model_ckpt, train_cfg, num_action_repeat, device):
     result = {}
     if model_ckpt.exists():
         result = load_ckpt(model_ckpt, device)
-        print(f"Resuming from epoch {result['epoch']}: {model_ckpt}")
+        log.info(f"Loaded model checkpoint from epoch {result['epoch']}: {model_ckpt}")
 
     if "encoder" not in result:
         result["encoder"] = hydra.utils.instantiate(
@@ -441,7 +448,9 @@ def planning_main(cfg_dict):
     ckpt_base_path = cfg_dict["ckpt_base_path"]
     model_path = f"{ckpt_base_path}/outputs/{cfg_dict['model_name']}/"
     if model_path.startswith("."):
-        model_path = os.path.join(os.path.dirname(__file__), model_path) # Make it into absolute path relative to current dir 
+        model_path = os.path.join(
+            os.path.dirname(__file__), model_path
+        )  # Make it into absolute path relative to current dir
     with open(os.path.join(model_path, "hydra.yaml"), "r") as f:
         model_cfg = OmegaConf.load(f)
 
@@ -463,6 +472,7 @@ def planning_main(cfg_dict):
     # use dummy vector env for wall and deformable envs
     if model_cfg.env.name == "wall" or model_cfg.env.name == "deformable_env":
         from env.serial_vector_env import SerialVectorEnv
+
         env = SerialVectorEnv(
             [
                 gym.make(

@@ -1,9 +1,15 @@
-import torch
-import decord
-import numpy as np
+from logging import getLogger
 from pathlib import Path
 from typing import Callable, Optional
-from .traj_dset import TrajDataset, get_train_val_sliced, TrajSlicerDataset
+
+import decord
+import numpy as np
+import torch
+
+from .traj_dset import TrajDataset, TrajSlicerDataset, get_train_val_sliced
+
+log = getLogger(__name__)
+
 decord.bridge.set_bridge("torch")
 
 # precomputed dataset stats
@@ -11,6 +17,7 @@ ACTION_MEAN = torch.tensor([0.0006, 0.0015])
 ACTION_STD = torch.tensor([0.4395, 0.4684])
 STATE_MEAN = torch.tensor([0.7518, 0.9239, -3.9702e-05, 3.1550e-04])
 STATE_STD = torch.tensor([1.0964, 1.2390, 1.3819, 1.5407])
+
 
 class WallDataset(TrajDataset):
     def __init__(
@@ -20,11 +27,10 @@ class WallDataset(TrajDataset):
         transform: Optional[Callable] = None,
         normalize_action: bool = False,
         action_scale=1.0,
-    ):  
+    ):
         self.data_path = Path(data_path)
         self.transform = transform
         self.normalize_action = normalize_action
-        print("Loading wall dataset...")
         states = torch.load(self.data_path / "states.pth")
         self.states = states
         self.proprios = self.states.clone()
@@ -38,7 +44,7 @@ class WallDataset(TrajDataset):
             n = self.n_rollout
         else:
             n = len(self.states)
-            print(f"Loaded {n} rollouts")
+        log.info(f"Loaded {n} rollouts")
 
         self.states = self.states[:n]
         self.actions = self.actions[:n]
@@ -87,35 +93,44 @@ class WallDataset(TrajDataset):
         door_location = self.door_locations[idx, frames]
         wall_location = self.wall_locations[idx, frames]
 
-        image = image[frames] / 255 
+        image = image[frames] / 255
         if self.transform:
             image = self.transform(image)
-        obs = {"visual": image,"proprio": proprio}
-        return obs, act, state, {'fix_door_location': door_location[0], 'fix_wall_location': wall_location[0]}
+        obs = {"visual": image, "proprio": proprio}
+        return (
+            obs,
+            act,
+            state,
+            {
+                "fix_door_location": door_location[0],
+                "fix_wall_location": wall_location[0],
+            },
+        )
 
     def __getitem__(self, idx):
         return self.get_frames(idx, range(self.get_seq_length(idx)))
 
     def __len__(self):
         return self.states.shape[0] if not self.n_rollout else self.n_rollout
-    
+
     def preprocess_imgs(self, imgs):
         if isinstance(imgs, np.ndarray):
             raise NotImplementedError
         elif isinstance(imgs, torch.Tensor):
             return imgs
 
+
 def load_wall_slice_train_val(
     transform,
     n_rollout=50,
-    data_path='data/wall_single',
+    data_path="data/wall_single",
     normalize_action=False,
     split_ratio=0.8,
     split_mode="random",
     num_hist=0,
     num_pred=0,
     frameskip=0,
-):  
+):
     if split_mode == "random":
         dset = WallDataset(
             n_rollout=n_rollout,
@@ -124,10 +139,10 @@ def load_wall_slice_train_val(
             normalize_action=normalize_action,
         )
         dset_train, dset_val, train_slices, val_slices = get_train_val_sliced(
-            traj_dataset=dset, 
-            train_fraction=split_ratio, 
-            num_frames=num_hist + num_pred, 
-            frameskip=frameskip
+            traj_dataset=dset,
+            train_fraction=split_ratio,
+            num_frames=num_hist + num_pred,
+            frameskip=frameskip,
         )
     elif split_mode == "folder":
         dset_train = WallDataset(
@@ -147,9 +162,9 @@ def load_wall_slice_train_val(
         val_slices = TrajSlicerDataset(dset_val, num_frames, frameskip)
 
     datasets = {}
-    datasets['train'] = train_slices
-    datasets['valid'] = val_slices
+    datasets["train"] = train_slices
+    datasets["valid"] = val_slices
     traj_dset = {}
-    traj_dset['train'] = dset_train
-    traj_dset['valid'] = dset_val
+    traj_dset["train"] = dset_train
+    traj_dset["valid"] = dset_val
     return datasets, traj_dset

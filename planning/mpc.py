@@ -1,10 +1,15 @@
-import torch
+from logging import getLogger
+
 import hydra
-import copy
 import numpy as np
-from einops import rearrange, repeat
+import torch
+from einops import rearrange
+
 from utils import slice_trajdict_with_t
+
 from .base_planner import BasePlanner
+
+log = getLogger(__name__)
 
 
 class MPCPlanner(BasePlanner):
@@ -94,7 +99,7 @@ class MPCPlanner(BasePlanner):
             memo_actions = actions.detach()[:, self.n_taken_actions :]
             self.planned_actions.append(taken_actions)
 
-            print(f"MPC iter {self.iter} Eval ------- ")
+            log.info(f"Iteration {self.iter}: Evaluating planned actions...")
             action_so_far = torch.cat(self.planned_actions, dim=1)
             self.evaluator.assign_init_cond(
                 obs_0=init_obs_0,
@@ -114,7 +119,9 @@ class MPCPlanner(BasePlanner):
                 (self.iter + 1) * self.n_taken_actions
             )  # Update only for the newly successful trajectories
 
-            print("self.is_success: ", self.is_success)
+            log.info(
+                f"Iteration {self.iter}: {np.sum(self.is_success)}/{len(self.is_success)} trajectories successful"
+            )
             logs = {f"{self.logging_prefix}/{k}": v for k, v in logs.items()}
             logs.update({"step": self.iter + 1})
             self.wandb_run.log(logs)
