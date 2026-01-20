@@ -352,7 +352,7 @@ class PlanWorkspace:
 
 def load_ckpt(snapshot_path, device):
     with snapshot_path.open("rb") as f:
-        payload = torch.load(f, map_location=device)
+        payload = torch.load(f, map_location=device, weights_only=False)
     loaded_keys = []
     result = {}
     for k, v in payload.items():
@@ -440,6 +440,8 @@ def planning_main(cfg_dict):
 
     ckpt_base_path = cfg_dict["ckpt_base_path"]
     model_path = f"{ckpt_base_path}/outputs/{cfg_dict['model_name']}/"
+    if model_path.startswith("."):
+        model_path = os.path.join(os.path.dirname(__file__), model_path) # Make it into absolute path relative to current dir 
     with open(os.path.join(model_path, "hydra.yaml"), "r") as f:
         model_cfg = OmegaConf.load(f)
 
